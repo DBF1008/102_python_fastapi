@@ -1513,6 +1513,20 @@ class FastAPI(Starlette):
                 """
             ),
         ] = None,
+        openapi_extra: Annotated[
+            dict[str, Any] | None,
+            Doc(
+                """
+                Extra OpenAPI schema extensions to be applied to all *path operations*
+                included from this router.
+
+                These are deep-merged with router-level and route-level `openapi_extra`
+                values, where route-level values take precedence.
+
+                It will be added to the generated OpenAPI (e.g. visible at `/docs`).
+                """
+            ),
+        ] = None,
         generate_unique_id_function: Annotated[
             Callable[[routing.APIRoute], str],
             Doc(
@@ -1558,6 +1572,7 @@ class FastAPI(Starlette):
             default_response_class=default_response_class,
             callbacks=callbacks,
             generate_unique_id_function=generate_unique_id_function,
+            openapi_extra=openapi_extra,
         )
 
     def get(

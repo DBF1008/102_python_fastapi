@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import email.message
 import functools
 import inspect
@@ -68,6 +69,7 @@ from fastapi.sse import (
 from fastapi.types import DecoratedCallable, IncEx
 from fastapi.utils import (
     create_model_field,
+    deep_dict_update,
     generate_unique_id,
     get_value_or_default,
     is_body_allowed_for_status_code,
@@ -1086,6 +1088,20 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = None,
+        openapi_extra: Annotated[
+            dict[str, Any] | None,
+            Doc(
+                """
+                Extra OpenAPI schema extensions to be applied to all *path operations*
+                in this router.
+
+                These are deep-merged with route-level `openapi_extra` values, where
+                route-level values take precedence.
+
+                It will be added to the generated OpenAPI (e.g. visible at `/docs`).
+                """
+            ),
+        ] = None,
         callbacks: Annotated[
             list[BaseRoute] | None,
             Doc(
@@ -1307,6 +1323,7 @@ class APIRouter(routing.Router):
         self.deprecated = deprecated
         self.include_in_schema = include_in_schema
         self.responses = responses or {}
+        self.openapi_extra: dict[str, Any] | None = openapi_extra
         self.callbacks = callbacks or []
         self.dependency_overrides_provider = dependency_overrides_provider
         self.route_class = route_class
@@ -1383,6 +1400,13 @@ class APIRouter(routing.Router):
         current_generate_unique_id = get_value_or_default(
             generate_unique_id_function, self.generate_unique_id_function
         )
+        # Merge router-level openapi_extra with route-level (route wins)
+        if self.openapi_extra is not None:
+            combined_openapi_extra = copy.deepcopy(self.openapi_extra)
+            if openapi_extra is not None:
+                deep_dict_update(combined_openapi_extra, openapi_extra)
+        else:
+            combined_openapi_extra = openapi_extra
         route = route_class(
             self.prefix + path,
             endpoint=endpoint,
@@ -1408,7 +1432,7 @@ class APIRouter(routing.Router):
             name=name,
             dependency_overrides_provider=self.dependency_overrides_provider,
             callbacks=current_callbacks,
-            openapi_extra=openapi_extra,
+            openapi_extra=combined_openapi_extra,
             generate_unique_id_function=current_generate_unique_id,
             strict_content_type=get_value_or_default(
                 strict_content_type, self.strict_content_type
@@ -1647,6 +1671,20 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = None,
+        openapi_extra: Annotated[
+            dict[str, Any] | None,
+            Doc(
+                """
+                Extra OpenAPI schema extensions to be applied to all *path operations*
+                included from this router.
+
+                These are deep-merged with router-level and route-level `openapi_extra`
+                values, where route-level values take precedence.
+
+                It will be added to the generated OpenAPI (e.g. visible at `/docs`).
+                """
+            ),
+        ] = None,
         deprecated: Annotated[
             bool | None,
             Doc(
@@ -1759,6 +1797,14 @@ class APIRouter(routing.Router):
                     generate_unique_id_function,
                     self.generate_unique_id_function,
                 )
+                # Merge include-level openapi_extra with route's
+                # (already merged with sub-router-level). Route wins.
+                if openapi_extra is not None:
+                    final_openapi_extra = copy.deepcopy(openapi_extra)
+                    if route.openapi_extra is not None:
+                        deep_dict_update(final_openapi_extra, route.openapi_extra)
+                else:
+                    final_openapi_extra = route.openapi_extra
                 self.add_api_route(
                     prefix + route.path,
                     route.endpoint,
@@ -1786,7 +1832,7 @@ class APIRouter(routing.Router):
                     name=route.name,
                     route_class_override=type(route),
                     callbacks=current_callbacks,
-                    openapi_extra=route.openapi_extra,
+                    openapi_extra=final_openapi_extra,
                     generate_unique_id_function=current_generate_unique_id,
                     strict_content_type=get_value_or_default(
                         route.strict_content_type,
