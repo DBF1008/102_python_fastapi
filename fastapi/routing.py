@@ -608,14 +608,10 @@ def get_request_handler(
                     _sse_with_checkpoints(sse_receive_stream)
                 )
 
-                response = StreamingResponse(
-                    sse_stream_content,
-                    media_type="text/event-stream",
+                response = actual_response_class(
+                    content=sse_stream_content,
                     background=solved_result.background_tasks,
                 )
-                response.headers["Cache-Control"] = "no-cache"
-                # For Nginx proxies to not buffer server sent events
-                response.headers["X-Accel-Buffering"] = "no"
                 response.headers.raw.extend(solved_result.response.headers.raw)
             elif is_json_stream:
                 # Generator endpoint: stream as JSONL

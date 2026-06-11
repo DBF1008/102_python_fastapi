@@ -27,10 +27,22 @@ class EventSourceResponse(StreamingResponse):
     with protocols like MCP that stream SSE over `POST`.
 
     The actual encoding logic lives in the FastAPI routing layer. This class
-    serves mainly as a marker and sets the correct `Content-Type`.
+    sets the correct ``Content-Type`` and the headers that SSE semantics
+    require so that reverse-proxies and load-balancers keep the connection
+    alive and unbuffered.
     """
 
     media_type = "text/event-stream"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        headers = self.headers
+        if "cache-control" not in headers:
+            headers["Cache-Control"] = "no-cache"
+        if "x-accel-buffering" not in headers:
+            headers["X-Accel-Buffering"] = "no"
+        if "connection" not in headers:
+            headers["Connection"] = "keep-alive"
 
 
 def _check_single_line(v: str | None, field_name: str) -> str | None:

@@ -111,6 +111,7 @@ def test_async_generator_with_model(client: TestClient):
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
     assert response.headers["cache-control"] == "no-cache"
     assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["connection"] == "keep-alive"
 
     lines = response.text.strip().split("\n")
     data_lines = [line for line in lines if line.startswith("data: ")]
@@ -130,6 +131,9 @@ def test_sync_generator_with_model(client: TestClient):
     response = client.get("/items/stream-sync")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["connection"] == "keep-alive"
 
     data_lines = [
         line for line in response.text.strip().split("\n") if line.startswith("data: ")
@@ -174,6 +178,9 @@ def test_post_method_sse(client: TestClient):
     response = client.post("/items/stream-post")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["connection"] == "keep-alive"
     data_lines = [
         line for line in response.text.strip().split("\n") if line.startswith("data: ")
     ]
@@ -183,6 +190,9 @@ def test_post_method_sse(client: TestClient):
 def test_sse_events_with_fields(client: TestClient):
     response = client.get("/items/stream-sse-event")
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["connection"] == "keep-alive"
     text = response.text
 
     assert "event: greeting\n" in text
@@ -325,3 +335,69 @@ def test_no_keepalive_when_fast(client: TestClient):
     assert response.status_code == 200
     # KEEPALIVE_COMMENT is ": ping\n\n".
     assert ": ping\n" not in response.text
+
+
+# EventSourceResponse type and header semantics
+
+
+def test_event_source_response_default_headers():
+    """EventSourceResponse sets SSE-semantic headers by default."""
+    response = EventSourceResponse(content=iter([]))
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["connection"] == "keep-alive"
+
+
+def test_event_source_response_custom_headers_not_overridden():
+    """User-provided headers are not overwritten by the defaults."""
+    response = EventSourceResponse(
+        content=iter([]),
+        headers={
+            "Cache-Control": "max-age=60",
+            "X-Accel-Buffering": "yes",
+            "Connection": "close",
+        },
+    )
+    assert response.headers["cache-control"] == "max-age=60"
+    assert response.headers["x-accel-buffering"] == "yes"
+    assert response.headers["connection"] == "close"
+
+
+def test_event_source_response_subclass():
+    """A custom EventSourceResponse subclass preserves its extra behavior."""
+
+    class CustomSSE(EventSourceResponse):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, **kwargs)
+            self.headers["X-Custom-SSE"] = "true"
+
+    custom_app = FastAPI()
+
+    @custom_app.get("/custom-sse", response_class=CustomSSE)
+    async def custom_sse_endpoint():
+        yield {"msg": "hello"}
+
+    with TestClient(custom_app) as c:
+        response = c.get("/custom-sse")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["connection"] == "keep-alive"
+    assert response.headers["x-custom-sse"] == "true"
+    data_lines = [
+        line for line in response.text.strip().split("\n") if line.startswith("data: ")
+    ]
+    assert len(data_lines) == 1
+
+
+def test_sse_route_is_sse_stream_flag():
+    """Routes with response_class=EventSourceResponse set is_sse_stream."""
+    for route in app.routes:
+        if hasattr(route, "is_sse_stream") and getattr(route, "path", "") in (
+            "/items/stream",
+            "/items/stream-sync",
+            "/items/stream-sse-event",
+        ):
+            assert route.is_sse_stream is True
