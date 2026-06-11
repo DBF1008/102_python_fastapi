@@ -883,6 +883,7 @@ class APIRoute(routing.Route):
         self.openapi_extra = openapi_extra
         self.generate_unique_id_function = generate_unique_id_function
         self.strict_content_type = strict_content_type
+        self._raw_strict_content_type = strict_content_type
         self.tags = tags or []
         self.responses = responses or {}
         self.name = get_name(endpoint) if name is None else name
@@ -1383,6 +1384,10 @@ class APIRouter(routing.Router):
         current_generate_unique_id = get_value_or_default(
             generate_unique_id_function, self.generate_unique_id_function
         )
+        raw_strict_content_type = strict_content_type
+        resolved_strict_content_type = get_value_or_default(
+            strict_content_type, self.strict_content_type
+        )
         route = route_class(
             self.prefix + path,
             endpoint=endpoint,
@@ -1410,10 +1415,9 @@ class APIRouter(routing.Router):
             callbacks=current_callbacks,
             openapi_extra=openapi_extra,
             generate_unique_id_function=current_generate_unique_id,
-            strict_content_type=get_value_or_default(
-                strict_content_type, self.strict_content_type
-            ),
+            strict_content_type=resolved_strict_content_type,
         )
+        route._raw_strict_content_type = raw_strict_content_type
         self.routes.append(route)
 
     def api_route(
@@ -1686,6 +1690,28 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = Default(generate_unique_id),
+        strict_content_type: Annotated[
+            bool | DefaultPlaceholder,
+            Doc(
+                """
+                Override the strict content type checking for all *path operations*
+                in this router at this mount point.
+
+                When `True` (the default), requests with a body that do not include
+                a `Content-Type` header will **not** be parsed as JSON.
+
+                When `False`, requests without a `Content-Type` header will have
+                their body parsed as JSON.
+
+                This override applies only at this specific `include_router` call
+                site; the same router included at a different mount point can use
+                a different setting.
+
+                Read more about it in the
+                [FastAPI docs for Strict Content-Type](https://fastapi.tiangolo.com/advanced/strict-content-type/).
+                """
+            ),
+        ] = Default(True),
     ) -> None:
         """
         Include another `APIRouter` in the same current `APIRouter`.
@@ -1789,7 +1815,8 @@ class APIRouter(routing.Router):
                     openapi_extra=route.openapi_extra,
                     generate_unique_id_function=current_generate_unique_id,
                     strict_content_type=get_value_or_default(
-                        route.strict_content_type,
+                        route._raw_strict_content_type,
+                        strict_content_type,
                         router.strict_content_type,
                         self.strict_content_type,
                     ),
