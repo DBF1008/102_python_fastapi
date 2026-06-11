@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import email.message
 import functools
 import inspect
@@ -68,6 +69,7 @@ from fastapi.sse import (
 from fastapi.types import DecoratedCallable, IncEx
 from fastapi.utils import (
     create_model_field,
+    deep_dict_update,
     generate_unique_id,
     get_value_or_default,
     is_body_allowed_for_status_code,
@@ -1686,6 +1688,18 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = Default(generate_unique_id),
+        openapi_extra: Annotated[
+            dict[str, Any] | None,
+            Doc(
+                """
+                A dict with OpenAPI extensions to be applied as defaults to all
+                *path operations* in this router.
+
+                These are deep-merged with any `openapi_extra` set on individual
+                routes, with the route-level values taking priority.
+                """
+            ),
+        ] = None,
     ) -> None:
         """
         Include another `APIRouter` in the same current `APIRouter`.
@@ -1759,6 +1773,14 @@ class APIRouter(routing.Router):
                     generate_unique_id_function,
                     self.generate_unique_id_function,
                 )
+                if openapi_extra or route.openapi_extra:
+                    current_openapi_extra: dict[str, Any] | None = (
+                        copy.deepcopy(openapi_extra) if openapi_extra else {}
+                    )
+                    if route.openapi_extra:
+                        deep_dict_update(current_openapi_extra, route.openapi_extra)
+                else:
+                    current_openapi_extra = None
                 self.add_api_route(
                     prefix + route.path,
                     route.endpoint,
@@ -1786,7 +1808,7 @@ class APIRouter(routing.Router):
                     name=route.name,
                     route_class_override=type(route),
                     callbacks=current_callbacks,
-                    openapi_extra=route.openapi_extra,
+                    openapi_extra=current_openapi_extra,
                     generate_unique_id_function=current_generate_unique_id,
                     strict_content_type=get_value_or_default(
                         route.strict_content_type,

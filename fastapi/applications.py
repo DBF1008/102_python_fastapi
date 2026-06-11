@@ -1528,6 +1528,18 @@ class FastAPI(Starlette):
                 """
             ),
         ] = Default(generate_unique_id),
+        openapi_extra: Annotated[
+            dict[str, Any] | None,
+            Doc(
+                """
+                A dict with OpenAPI extensions to be applied as defaults to all
+                *path operations* in this router.
+
+                These are deep-merged with any `openapi_extra` set on individual
+                routes, with the route-level values taking priority.
+                """
+            ),
+        ] = None,
     ) -> None:
         """
         Include an `APIRouter` in the same app.
@@ -1558,6 +1570,7 @@ class FastAPI(Starlette):
             default_response_class=default_response_class,
             callbacks=callbacks,
             generate_unique_id_function=generate_unique_id_function,
+            openapi_extra=openapi_extra,
         )
 
     def get(
