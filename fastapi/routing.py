@@ -348,6 +348,13 @@ def _build_response_args(
     return response_args
 
 
+def _is_json_response_class(
+    response_class: type[Response] | DefaultPlaceholder,
+) -> bool:
+    cls = response_class.value if isinstance(response_class, DefaultPlaceholder) else response_class
+    return lenient_issubclass(cls, JSONResponse)
+
+
 def get_request_handler(
     dependant: Dependant,
     body_field: ModelField | None = None,
@@ -684,13 +691,9 @@ def get_request_handler(
                     response_args = _build_response_args(
                         status_code=status_code, solved_result=solved_result
                     )
-                    # Use the fast path (dump_json) when no custom response
-                    # class was set and a response field with a TypeAdapter
-                    # exists. Serializes directly to JSON bytes via Pydantic's
-                    # Rust core, skipping the intermediate Python dict +
-                    # json.dumps() step.
-                    use_dump_json = response_field is not None and isinstance(
-                        response_class, DefaultPlaceholder
+                    use_dump_json = (
+                        response_field is not None
+                        and _is_json_response_class(response_class)
                     )
                     content = await serialize_response(
                         field=response_field,
@@ -708,7 +711,7 @@ def get_request_handler(
                     if use_dump_json:
                         response = Response(
                             content=content,
-                            media_type="application/json",
+                            media_type=actual_response_class.media_type,
                             **response_args,
                         )
                     else:
