@@ -9,6 +9,7 @@ from fastapi.responses import EventSourceResponse
 from fastapi.sse import ServerSentEvent
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
 
 
 class Item(BaseModel):
@@ -325,3 +326,264 @@ def test_no_keepalive_when_fast(client: TestClient):
     assert response.status_code == 200
     # KEEPALIVE_COMMENT is ": ping\n\n".
     assert ": ping\n" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# Response-type regression tests
+#
+# Verify that SSE routes instantiate the *declared* EventSourceResponse (or
+# subclass) rather than silently degrading to a plain StreamingResponse.
+# This is the exact failure mode reported: middleware / proxy layers that
+# check ``isinstance(response, EventSourceResponse)`` would get False.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingSSEResponse(EventSourceResponse):
+    """EventSourceResponse subclass that records every instance created."""
+
+    instances: list[EventSourceResponse] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        _RecordingSSEResponse.instances.append(self)
+
+
+_recording_app = FastAPI()
+
+
+@_recording_app.get("/async", response_class=_RecordingSSEResponse)
+async def recording_async() -> AsyncIterable[Item]:
+    for item in items:
+        yield item
+
+
+@_recording_app.get("/sync", response_class=_RecordingSSEResponse)
+def recording_sync() -> Iterable[Item]:
+    yield from items
+
+
+@_recording_app.get("/sse-event", response_class=_RecordingSSEResponse)
+async def recording_sse_event():
+    yield ServerSentEvent(data="hello", event="greeting", id="1")
+    yield ServerSentEvent(data={"key": "value"}, event="json-data", id="2")
+    yield ServerSentEvent(comment="just a comment")
+    yield ServerSentEvent(data="retry-test", retry=5000)
+
+
+def test_response_type_async():
+    """Async generator SSE route must produce EventSourceResponse instances."""
+    _RecordingSSEResponse.instances.clear()
+    with TestClient(_recording_app) as c:
+        response = c.get("/async")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert len(_RecordingSSEResponse.instances) == 1
+    inst = _RecordingSSEResponse.instances[0]
+    assert isinstance(inst, EventSourceResponse)
+    assert not (type(inst) is StreamingResponse)
+
+
+def test_response_type_sync():
+    """Sync generator SSE route must produce EventSourceResponse instances."""
+    _RecordingSSEResponse.instances.clear()
+    with TestClient(_recording_app) as c:
+        response = c.get("/sync")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert len(_RecordingSSEResponse.instances) == 1
+    inst = _RecordingSSEResponse.instances[0]
+    assert isinstance(inst, EventSourceResponse)
+    assert not (type(inst) is StreamingResponse)
+
+
+def test_response_type_sse_event():
+    """SSE route yielding ServerSentEvent objects must use EventSourceResponse."""
+    _RecordingSSEResponse.instances.clear()
+    with TestClient(_recording_app) as c:
+        response = c.get("/sse-event")
+    assert response.status_code == 200
+    assert len(_RecordingSSEResponse.instances) == 1
+    inst = _RecordingSSEResponse.instances[0]
+    assert isinstance(inst, EventSourceResponse)
+    # Data integrity: all four events arrive correctly
+    text = response.text
+    assert "event: greeting\n" in text
+    assert 'data: "hello"\n' in text
+    assert "id: 1\n" in text
+    assert "event: json-data\n" in text
+    assert "id: 2\n" in text
+    assert ": just a comment\n" in text
+    assert "retry: 5000\n" in text
+
+
+# ---------------------------------------------------------------------------
+# Custom EventSourceResponse subclass: extra headers preserved
+# ---------------------------------------------------------------------------
+
+
+class CustomSSEResponse(EventSourceResponse):
+    """Subclass that injects extra headers in __init__."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.headers["X-Custom-SSE"] = "true"
+        self.headers["X-SSE-Version"] = "2.0"
+
+
+_custom_app = FastAPI()
+
+
+@_custom_app.get("/stream", response_class=CustomSSEResponse)
+async def custom_stream():
+    yield {"n": 1}
+    yield {"n": 2}
+
+
+@_custom_app.get("/stream-sync", response_class=CustomSSEResponse)
+def custom_stream_sync() -> Iterable[dict[str, int]]:
+    yield {"n": 1}
+    yield {"n": 2}
+
+
+@_custom_app.get("/stream-sse-event", response_class=CustomSSEResponse)
+async def custom_stream_sse_event():
+    yield ServerSentEvent(data="hello", event="greeting", id="1")
+
+
+def test_custom_subclass_headers_async():
+    """Custom EventSourceResponse subclass headers survive on async routes."""
+    with TestClient(_custom_app) as c:
+        response = c.get("/stream")
+    assert response.status_code == 200
+    # Custom headers from subclass
+    assert response.headers["x-custom-sse"] == "true"
+    assert response.headers["x-sse-version"] == "2.0"
+    # Standard SSE headers still present
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    # Data intact
+    data_lines = [
+        line for line in response.text.strip().split("\n") if line.startswith("data: ")
+    ]
+    assert len(data_lines) == 2
+
+
+def test_custom_subclass_headers_sync():
+    """Custom EventSourceResponse subclass headers survive on sync routes."""
+    with TestClient(_custom_app) as c:
+        response = c.get("/stream-sync")
+    assert response.status_code == 200
+    assert response.headers["x-custom-sse"] == "true"
+    assert response.headers["x-sse-version"] == "2.0"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+
+
+def test_custom_subclass_with_server_sent_event():
+    """Custom subclass + ServerSentEvent objects: both headers and data intact."""
+    with TestClient(_custom_app) as c:
+        response = c.get("/stream-sse-event")
+    assert response.status_code == 200
+    # Custom headers
+    assert response.headers["x-custom-sse"] == "true"
+    # Standard headers
+    assert response.headers["cache-control"] == "no-cache"
+    # SSE data
+    assert "event: greeting\n" in response.text
+    assert 'data: "hello"\n' in response.text
+
+
+# ---------------------------------------------------------------------------
+# Proxy / middleware isinstance detection
+#
+# Simulates the exact failure scenario: an ASGI middleware inspects the
+# http.response.start message to decide whether the connection is SSE.
+# Before the fix the response was a plain StreamingResponse and any
+# isinstance-based dispatch in middleware would fail.
+# ---------------------------------------------------------------------------
+
+
+class _SSEDetectionMiddleware:
+    """Raw ASGI middleware that marks SSE responses with an extra header."""
+
+    def __init__(self, app: object) -> None:
+        self.app = app
+
+    async def __call__(
+        self, scope: dict, receive: object, send: object
+    ) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
+
+        async def send_wrapper(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                headers = {
+                    k.decode(): v.decode()
+                    for k, v in message.get("headers", [])
+                }
+                # A proxy layer would use these SSE markers to decide
+                # whether to disable buffering and keep the connection open.
+                if (
+                    "text/event-stream" in headers.get("content-type", "")
+                    and headers.get("cache-control") == "no-cache"
+                    and headers.get("x-accel-buffering") == "no"
+                ):
+                    message["headers"].append(
+                        (b"x-proxy-sse-detected", b"true")
+                    )
+            await send(message)  # type: ignore[operator]
+
+        await self.app(scope, receive, send_wrapper)  # type: ignore[operator]
+
+
+_proxy_app = FastAPI()
+_proxy_app.add_middleware(_SSEDetectionMiddleware)
+
+
+@_proxy_app.get("/sse", response_class=EventSourceResponse)
+async def proxy_sse():
+    yield {"msg": "hello"}
+    yield {"msg": "world"}
+
+
+@_proxy_app.get("/sse-event-obj", response_class=EventSourceResponse)
+async def proxy_sse_event():
+    yield ServerSentEvent(data="test", event="update", id="42")
+
+
+@_proxy_app.get("/plain")
+async def proxy_plain():
+    return {"msg": "not sse"}
+
+
+def test_proxy_middleware_detects_sse():
+    """ASGI middleware can correctly identify SSE responses (not degraded)."""
+    with TestClient(_proxy_app) as c:
+        response = c.get("/sse")
+    assert response.status_code == 200
+    assert response.headers.get("x-proxy-sse-detected") == "true"
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+    data_lines = [
+        line for line in response.text.strip().split("\n") if line.startswith("data: ")
+    ]
+    assert len(data_lines) == 2
+
+
+def test_proxy_middleware_detects_sse_with_event_objects():
+    """Proxy detection works when yielding ServerSentEvent objects."""
+    with TestClient(_proxy_app) as c:
+        response = c.get("/sse-event-obj")
+    assert response.status_code == 200
+    assert response.headers.get("x-proxy-sse-detected") == "true"
+    assert "event: update\n" in response.text
+    assert "id: 42\n" in response.text
+
+
+def test_proxy_middleware_ignores_non_sse():
+    """Non-SSE routes are not falsely flagged by the proxy middleware."""
+    with TestClient(_proxy_app) as c:
+        response = c.get("/plain")
+    assert response.status_code == 200
+    assert response.headers.get("x-proxy-sse-detected") is None

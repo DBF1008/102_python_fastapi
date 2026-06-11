@@ -608,9 +608,8 @@ def get_request_handler(
                     _sse_with_checkpoints(sse_receive_stream)
                 )
 
-                response = StreamingResponse(
+                response = actual_response_class(
                     sse_stream_content,
-                    media_type="text/event-stream",
                     background=solved_result.background_tasks,
                 )
                 response.headers["Cache-Control"] = "no-cache"
