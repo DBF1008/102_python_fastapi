@@ -52,8 +52,10 @@ class Dependant:
 
     @cached_property
     def oauth_scopes(self) -> list[str]:
-        scopes = self.parent_oauth_scopes.copy() if self.parent_oauth_scopes else []
-        # This doesn't use a set to preserve order, just in case
+        scopes: list[str] = []
+        for scope in self.parent_oauth_scopes or []:
+            if scope not in scopes:
+                scopes.append(scope)
         for scope in self.own_oauth_scopes or []:
             if scope not in scopes:
                 scopes.append(scope)

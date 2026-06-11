@@ -99,7 +99,7 @@ def get_openapi_security_definitions(
             if scope not in operation_security_dict[security_name]:
                 operation_security_dict[security_name].append(scope)
     operation_security = [
-        {name: scopes} for name, scopes in operation_security_dict.items()
+        {name: sorted(scopes)} for name, scopes in operation_security_dict.items()
     ]
     return security_definitions, operation_security
 

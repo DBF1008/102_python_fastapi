@@ -146,7 +146,7 @@ def get_flat_dependant(
         visited = []
     visited.append(dependant.cache_key)
     use_parent_oauth_scopes = (parent_oauth_scopes or []) + (
-        dependant.oauth_scopes or []
+        dependant.own_oauth_scopes or []
     )
 
     flat_dependant = Dependant(
