@@ -1686,6 +1686,27 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = Default(generate_unique_id),
+        strict_content_type: Annotated[
+            bool,
+            Doc(
+                """
+                Override strict Content-Type checking for all *path operations*
+                in this router when included at this mount point.
+
+                When `True` (the default), requests with a body that do not include
+                a `Content-Type` header will **not** be parsed as JSON.
+
+                When `False`, requests without a `Content-Type` header will have
+                their body parsed as JSON.
+
+                This can be overridden by the router's own `strict_content_type`
+                setting, or by individual route settings.
+
+                Read more about it in the
+                [FastAPI docs for Strict Content-Type](https://fastapi.tiangolo.com/advanced/strict-content-type/).
+                """
+            ),
+        ] = Default(True),
     ) -> None:
         """
         Include another `APIRouter` in the same current `APIRouter`.
@@ -1791,6 +1812,7 @@ class APIRouter(routing.Router):
                     strict_content_type=get_value_or_default(
                         route.strict_content_type,
                         router.strict_content_type,
+                        strict_content_type,
                         self.strict_content_type,
                     ),
                 )

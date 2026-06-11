@@ -1528,6 +1528,27 @@ class FastAPI(Starlette):
                 """
             ),
         ] = Default(generate_unique_id),
+        strict_content_type: Annotated[
+            bool,
+            Doc(
+                """
+                Override strict Content-Type checking for all *path operations*
+                in this router when included at this mount point.
+
+                When `True` (the default), requests with a body that do not include
+                a `Content-Type` header will **not** be parsed as JSON.
+
+                When `False`, requests without a `Content-Type` header will have
+                their body parsed as JSON.
+
+                This can be overridden by the router's own `strict_content_type`
+                setting, or by individual route settings.
+
+                Read more about it in the
+                [FastAPI docs for Strict Content-Type](https://fastapi.tiangolo.com/advanced/strict-content-type/).
+                """
+            ),
+        ] = Default(True),
     ) -> None:
         """
         Include an `APIRouter` in the same app.
@@ -1558,6 +1579,7 @@ class FastAPI(Starlette):
             default_response_class=default_response_class,
             callbacks=callbacks,
             generate_unique_id_function=generate_unique_id_function,
+            strict_content_type=strict_content_type,
         )
 
     def get(
